@@ -23,7 +23,14 @@ pub fn fir_dot_product(coefs: &[i16], history: &[i32]) -> i64 {
 
     #[cfg(target_arch = "x86_64")]
     {
-        if is_x86_feature_detected!("sse2") && history.len() >= 4 {
+        if is_x86_feature_detected!("avx512f")
+            && is_x86_feature_detected!("avx512bw")
+            && history.len() >= 16
+        {
+            return unsafe { fir_dot_avx512(coefs, history) };
+        } else if is_x86_feature_detected!("avx2") && history.len() >= 8 {
+            return unsafe { fir_dot_avx2(coefs, history) };
+        } else if is_x86_feature_detected!("sse2") && history.len() >= 4 {
             return unsafe { fir_dot_sse2(coefs, history) };
         }
     }
@@ -43,6 +50,53 @@ fn fir_dot_scalar(coefs: &[i16], history: &[i32]) -> i64 {
 
 /// Deinterleave stereo S16LE samples into separate i32 channel buffers.
 #[inline]
+pub fn apply_mix(
+    num_samples: usize,
+    mix_bits: i32,
+    mix_res: i32,
+    left: &[i32],
+    right: &[i32],
+    mix_u: &mut [i32],
+    mix_v: &mut [i32],
+) {
+    #[cfg(target_arch = "aarch64")]
+    {
+        if num_samples >= 4 {
+            unsafe { apply_mix_neon(num_samples, mix_bits, mix_res, left, right, mix_u, mix_v) };
+            return;
+        }
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    {
+        if is_x86_feature_detected!("avx2") && num_samples >= 8 {
+            unsafe { apply_mix_avx2(num_samples, mix_bits, mix_res, left, right, mix_u, mix_v) };
+            return;
+        }
+    }
+
+    apply_mix_scalar(num_samples, mix_bits, mix_res, left, right, mix_u, mix_v);
+}
+
+#[inline]
+fn apply_mix_scalar(
+    num: usize,
+    mix_bits: i32,
+    mix_res: i32,
+    left: &[i32],
+    right: &[i32],
+    mix_u: &mut [i32],
+    mix_v: &mut [i32],
+) {
+    let m = 1i32 << mix_bits;
+    for i in 0..num {
+        let l = left[i];
+        let r = right[i];
+        mix_u[i] = (l + (m - mix_res) * r) / m;
+        mix_v[i] = l - r;
+    }
+}
+
 pub fn deinterleave_s16le(pcm: &[u8], left: &mut [i32], right: &mut [i32], num_samples: usize) {
     #[cfg(target_arch = "aarch64")]
     {
@@ -91,7 +145,7 @@ fn s24le_to_i32(b: &[u8]) -> i32 {
 // ── aarch64 NEON implementations ──────────────────────────────────────────────
 
 #[cfg(target_arch = "aarch64")]
-use std::arch::aarch64::*;
+use core::arch::aarch64::*;
 
 /// NEON FIR dot product: processes 4 coefs at a time using widening multiply-add.
 #[cfg(target_arch = "aarch64")]
@@ -173,7 +227,7 @@ unsafe fn deinterleave_s16le_neon(
 
 #[cfg(target_arch = "x86_64")]
 #[allow(unused_imports)]
-use std::arch::x86_64::*;
+use core::arch::x86_64::*;
 
 /// SSE2 FIR dot product: processes elements using i64 accumulation.
 /// SSE2 lacks a signed 32×32→64 multiply (_mm_mul_epi32 is SSE4.1),
@@ -209,6 +263,9 @@ unsafe fn fir_dot_sse2(coefs: &[i16], history: &[i32]) -> i64 {
 
 #[cfg(test)]
 mod tests {
+    extern crate alloc;
+    use alloc::vec::Vec;
+    use alloc::vec;
     use super::*;
 
     #[test]
@@ -237,4 +294,136 @@ mod tests {
         assert_eq!(left, vec![1, -2, -32768, 0]);
         assert_eq!(right, vec![2, -3, 32767, 0]);
     }
+}
+
+#[cfg(target_arch = "aarch64")]
+#[target_feature(enable = "neon")]
+unsafe fn apply_mix_neon(
+    num: usize,
+    mix_bits: i32,
+    mix_res: i32,
+    left: &[i32],
+    right: &[i32],
+    mix_u: &mut [i32],
+    mix_v: &mut [i32],
+) {
+    let m = 1i32 << mix_bits;
+    let m_minus_res = m - mix_res;
+
+    let v_m_minus_res = vdupq_n_s32(m_minus_res);
+
+    let chunks = num / 4;
+    for i in 0..chunks {
+        let base = i * 4;
+        let vl = vld1q_s32(left.as_ptr().add(base));
+        let vr = vld1q_s32(right.as_ptr().add(base));
+
+        // mix_v[i] = l - r;
+        let v_diff = vsubq_s32(vl, vr);
+        vst1q_s32(mix_v.as_mut_ptr().add(base), v_diff);
+
+        // mix_u[i] = (l + (m - mix_res) * r) / m;
+        // ALAC mix formula uses truncation division
+        let v_mul = vmulq_s32(v_m_minus_res, vr);
+        let v_add = vaddq_s32(vl, v_mul);
+        // Note: Integer division is not directly supported in NEON for vectors easily without shifts.
+        // Since m is 1 << mix_bits, division by m is a right shift if positive, but ALAC uses signed division.
+        // We can do a signed right shift with shift amount mix_bits?
+        // Wait, ALAC signed division truncates towards zero. So we need to handle negative numbers carefully if using right shift.
+        // Actually for Phase 2 we can just use scalar division for the remaining elements, or a quick scalar loop for the division if we want exact compliance.
+        // Let's just do a scalar fallback for division if we need truncation towards zero.
+        // Or: x / m == (x + ((x < 0) ? (m-1) : 0)) >> mix_bits
+
+        // v_lt_zero = x < 0
+        let v_zero = vdupq_n_s32(0);
+        let v_lt_zero = vcltq_s32(v_add, v_zero);
+
+        // v_offset = v_lt_zero & (m - 1)
+        let v_m_minus_1 = vdupq_n_s32(m - 1);
+        // v_lt_zero returns uint32x4_t, we need to cast it
+        let v_lt_zero_s32 = vreinterpretq_s32_u32(v_lt_zero);
+        let v_offset = vandq_s32(v_lt_zero_s32, v_m_minus_1);
+
+        // v_add = v_add + v_offset
+        let v_add_adj = vaddq_s32(v_add, v_offset);
+
+        // v_res = v_add_adj >> mix_bits
+        // Since vshlq_s32 requires a vector or constant, we can use vshlq_s32 with a negative shift vector
+        let v_shift = vdupq_n_s32(-mix_bits);
+        let v_res = vshlq_s32(v_add_adj, v_shift);
+
+        vst1q_s32(mix_u.as_mut_ptr().add(base), v_res);
+    }
+
+    // Remaining elements
+    apply_mix_scalar(
+        num - chunks * 4,
+        mix_bits,
+        mix_res,
+        &left[chunks * 4..],
+        &right[chunks * 4..],
+        &mut mix_u[chunks * 4..],
+        &mut mix_v[chunks * 4..],
+    );
+}
+
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2")]
+unsafe fn apply_mix_avx2(
+    num: usize,
+    mix_bits: i32,
+    mix_res: i32,
+    left: &[i32],
+    right: &[i32],
+    mix_u: &mut [i32],
+    mix_v: &mut [i32],
+) {
+    let m = 1i32 << mix_bits;
+    let m_minus_res = m - mix_res;
+
+    let v_m_minus_res = _mm256_set1_epi32(m_minus_res);
+    let v_m_minus_1 = _mm256_set1_epi32(m - 1);
+
+    let chunks = num / 8;
+    for i in 0..chunks {
+        let base = i * 8;
+        let vl = _mm256_loadu_si256(left.as_ptr().add(base) as *const _);
+        let vr = _mm256_loadu_si256(right.as_ptr().add(base) as *const _);
+
+        // mix_v[i] = l - r;
+        let v_diff = _mm256_sub_epi32(vl, vr);
+        _mm256_storeu_si256(mix_v.as_mut_ptr().add(base) as *mut _, v_diff);
+
+        // mix_u[i] = (l + (m - mix_res) * r) / m;
+        // Note: AVX2 _mm256_mullo_epi32 for 32-bit multiplication
+        let v_mul = _mm256_mullo_epi32(v_m_minus_res, vr);
+        let v_add = _mm256_add_epi32(vl, v_mul);
+
+        // division by m
+        // (x + ((x < 0) ? (m-1) : 0)) >> mix_bits
+        let v_zero = _mm256_setzero_si256();
+        let v_lt_zero = _mm256_cmpgt_epi32(v_zero, v_add); // 0 > x -> x < 0
+
+        let v_offset = _mm256_and_si256(v_lt_zero, v_m_minus_1);
+        let v_add_adj = _mm256_add_epi32(v_add, v_offset);
+
+        // signed shift right by mix_bits
+        // _mm256_srai_epi32 requires immediate, we use sra_epi32 or dynamically shift?
+        // _mm256_srav_epi32 can use a variable shift vector, or we can use _mm256_sra_epi32 with an xmm shift count
+        let v_shift = _mm_cvtsi32_si128(mix_bits);
+        let v_res = _mm256_sra_epi32(v_add_adj, v_shift);
+
+        _mm256_storeu_si256(mix_u.as_mut_ptr().add(base) as *mut _, v_res);
+    }
+
+    // Remaining elements
+    apply_mix_scalar(
+        num - chunks * 8,
+        mix_bits,
+        mix_res,
+        &left[chunks * 8..],
+        &right[chunks * 8..],
+        &mut mix_u[chunks * 8..],
+        &mut mix_v[chunks * 8..],
+    );
 }

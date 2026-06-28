@@ -1,3 +1,5 @@
+#![cfg_attr(not(feature = "std"), no_std)]
+
 //! ALAC (vendor Lossless Audio Codec) encoder with SIMD acceleration.
 //!
 //! Implements the compressed encoding path for stereo 16-bit and 24-bit frames,
@@ -10,10 +12,37 @@
 //! - SIMD: aarch64 NEON for FIR inner loop and sample deinterleaving,
 //!   x86_64 SSE2 fallback
 
-mod bitwriter;
-mod encoder;
-mod golomb;
+extern crate alloc;
+
+pub mod bitwriter;
+pub mod encoder;
+pub mod ffi;
+pub mod golomb;
 mod predictor;
 mod simd;
 
+#[cfg(feature = "grpc")]
+pub mod grpc;
+
+#[cfg(feature = "crypto")]
+pub mod crypto;
+
+#[cfg(feature = "audiophile")]
+pub mod audiophile;
+
+#[cfg(feature = "spatial")]
+pub mod spatial;
+
+#[cfg(feature = "wasm")]
+pub mod wasm;
+
+#[cfg(feature = "integrations")]
+pub mod integrations;
+
+#[cfg(feature = "std")]
+pub mod stream;
+
 pub use encoder::{AlacConfig, AlacEncoder, AlacError};
+
+#[cfg(feature = "ebpf")]
+usdt::dtrace_provider!("src/provider.d");

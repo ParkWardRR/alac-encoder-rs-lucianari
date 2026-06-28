@@ -67,6 +67,9 @@ impl<'a> BitWriter<'a> {
 
 #[cfg(test)]
 mod tests {
+    extern crate alloc;
+    use alloc::vec::Vec;
+    use alloc::vec;
     use super::*;
 
     #[test]

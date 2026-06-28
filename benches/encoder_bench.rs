@@ -17,17 +17,18 @@ fn make_pcm_sine(num_samples: usize) -> Vec<u8> {
 
 fn bench_encode(c: &mut Criterion) {
     let config = AlacConfig::default();
-    let mut enc = AlacEncoder::new(config);
+    let mut enc = AlacEncoder::new(config.clone());
     let pcm = make_pcm_sine(352);
     let mut out = vec![0u8; 8192];
+    let mut workspace = vec![0i32; AlacEncoder::required_workspace(config.channels, config.frame_size)];
     
     // Warmup encoder to converge predictor
     for _ in 0..10 {
-        enc.encode(&pcm, &mut out);
+        enc.encode(&pcm, &mut workspace, &mut out);
     }
 
     c.bench_function("encode_stereo_16_sine", |b| b.iter(|| {
-        enc.encode(black_box(&pcm), black_box(&mut out))
+        enc.encode(black_box(&pcm), black_box(&mut workspace), black_box(&mut out))
     }));
 }
 

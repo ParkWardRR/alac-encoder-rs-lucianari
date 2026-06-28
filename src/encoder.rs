@@ -12,6 +12,7 @@ use crate::simd;
 /// ALAC element types (from ALACAudioTypes.h).
 const TYPE_SCE: u32 = 0; // Single Channel Element
 const TYPE_CPE: u32 = 1; // Channel Pair Element
+const TYPE_LFE: u32 = 3; // LFE Channel Element
 const TYPE_END: u32 = 7; // End tag
 
 /// Adaptive Golomb pb_factor.
@@ -19,6 +20,7 @@ const PB_FACTOR: u32 = 4;
 
 /// Errors that can occur during ALAC encoding.
 #[derive(thiserror::Error, Debug)]
+#[non_exhaustive]
 pub enum AlacError {
     /// Provided output buffer is too small.
     #[error("Output buffer too small: required {required}, provided {provided}")]
@@ -28,13 +30,38 @@ pub enum AlacError {
     UnsupportedConfig { channels: u32, bit_depth: u32 },
 }
 
+/// Predefined channel layouts for multi-channel audio.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ChannelLayout {
+    Mono,
+    Stereo,
+    Surround5Point1,
+    Surround7Point1,
+    Custom(u32),
+}
+
+impl ChannelLayout {
+    pub fn channels(&self) -> u32 {
+        match self {
+            Self::Mono => 1,
+            Self::Stereo => 2,
+            Self::Surround5Point1 => 6,
+            Self::Surround7Point1 => 8,
+            Self::Custom(c) => *c,
+        }
+    }
+}
+
 /// Encoder configuration.
 #[derive(Clone, Debug)]
 pub struct AlacConfig {
     /// Samples per frame (typically 352 for protocol).
     pub frame_size: u32,
-    /// Number of channels (1 = mono, 2 = stereo).
+    /// Channel layout (1 = mono, 2 = stereo, etc.).
     pub channels: u32,
+    /// Detailed channel layout semantics.
+    pub layout: ChannelLayout,
     /// Bit depth (16 or 24).
     pub bit_depth: u32,
     /// Sample rate in Hz.
@@ -46,6 +73,7 @@ impl Default for AlacConfig {
         Self {
             frame_size: 352,
             channels: 2,
+            layout: ChannelLayout::Stereo,
             bit_depth: 16,
             sample_rate: 44100,
         }
@@ -53,33 +81,54 @@ impl Default for AlacConfig {
 }
 
 /// ALAC encoder with persistent state across frames.
+
+/// Workspace slice wrapper for ALAC encoding.
+pub struct Workspace<'a> {
+    pub mix_u: &'a mut [i32],
+    pub mix_v: &'a mut [i32],
+    pub residuals_u: &'a mut [i32],
+    pub residuals_v: &'a mut [i32],
+    pub left: &'a mut [i32],
+    pub right: &'a mut [i32],
+}
+
+impl<'a> Workspace<'a> {
+    pub fn new(workspace: &'a mut [i32], frame_size: usize) -> Self {
+        let n = frame_size;
+        let (mix_u, rest) = workspace.split_at_mut(n);
+        let (mix_v, rest) = rest.split_at_mut(n);
+        let (residuals_u, rest) = rest.split_at_mut(n);
+        let (residuals_v, rest) = rest.split_at_mut(n);
+        let (left, rest) = rest.split_at_mut(n);
+        let (right, _) = rest.split_at_mut(n);
+        Self {
+            mix_u,
+            mix_v,
+            residuals_u,
+            residuals_v,
+            left,
+            right,
+        }
+    }
+}
+
 pub struct AlacEncoder {
     config: AlacConfig,
     pred_u: Predictor,
     pred_v: Predictor,
-    // Work buffers — allocated once, reused per frame.
-    mix_u: Vec<i32>,
-    mix_v: Vec<i32>,
-    residuals_u: Vec<i32>,
-    residuals_v: Vec<i32>,
-    left: Vec<i32>,
-    right: Vec<i32>,
     last_mix_res: i32,
 }
 
 impl AlacEncoder {
+    pub const fn required_workspace(_channels: u32, frame_size: u32) -> usize {
+        6 * frame_size as usize
+    }
+
     /// Create a new encoder with the given configuration.
     pub fn new(config: AlacConfig) -> Self {
-        let n = config.frame_size as usize;
         Self {
             pred_u: Predictor::new(DEFAULT_ORDER, DEFAULT_DENSHIFT),
             pred_v: Predictor::new(DEFAULT_ORDER, DEFAULT_DENSHIFT),
-            mix_u: vec![0i32; n],
-            mix_v: vec![0i32; n],
-            residuals_u: vec![0i32; n],
-            residuals_v: vec![0i32; n],
-            left: vec![0i32; n],
-            right: vec![0i32; n],
             last_mix_res: 0,
             config,
         }
@@ -90,351 +139,250 @@ impl AlacEncoder {
     /// Returns the number of bytes written to `out`, or an `AlacError`.
     /// `pcm` must contain `frame_size * channels * (bit_depth/8)` bytes.
     /// `out` must be large enough (worst case: slightly larger than PCM).
-    pub fn encode(&mut self, pcm: &[u8], out: &mut [u8]) -> Result<usize, AlacError> {
-        let num = self.config.frame_size as usize;
+    pub fn encode(
+        &mut self,
+        pcm: &[u8],
+        workspace: &mut [i32],
+        out: &mut [u8],
+    ) -> Result<usize, AlacError> {
+        let required = Self::required_workspace(self.config.channels, self.config.frame_size);
+        if workspace.len() < required {
+            return Err(AlacError::BufferTooSmall {
+                required,
+                provided: workspace.len(),
+            });
+        }
         let channels = self.config.channels as usize;
         let bit_depth = self.config.bit_depth;
+        let bytes_per_frame = channels * (bit_depth as usize / 8);
+        let num = pcm.len() / bytes_per_frame;
 
-        if channels == 2 && bit_depth == 16 {
-            Ok(self.encode_stereo_16(pcm, out, num))
-        } else if channels == 2 && bit_depth == 24 {
-            Ok(self.encode_stereo_24(pcm, out, num))
-        } else if channels == 1 && bit_depth == 16 {
-            Ok(self.encode_mono_16(pcm, out, num))
+        let mut bw = BitWriter::new(out);
+
+        if channels == 1 {
+            self.encode_element_mono(pcm, workspace, &mut bw, num, 0, false);
+        } else if channels == 2 {
+            self.encode_element_stereo(pcm, workspace, &mut bw, num, 0);
+        } else if channels == 6 {
+            self.encode_element_mono(pcm, workspace, &mut bw, num, 0, false); // C
+            self.encode_element_stereo(pcm, workspace, &mut bw, num, 1);      // L, R
+            self.encode_element_stereo(pcm, workspace, &mut bw, num, 3);      // Ls, Rs
+            self.encode_element_mono(pcm, workspace, &mut bw, num, 5, true);  // LFE
+        } else if channels == 8 {
+            self.encode_element_mono(pcm, workspace, &mut bw, num, 0, false); // C
+            self.encode_element_stereo(pcm, workspace, &mut bw, num, 1);      // L, R
+            self.encode_element_stereo(pcm, workspace, &mut bw, num, 3);      // Ls, Rs
+            self.encode_element_stereo(pcm, workspace, &mut bw, num, 5);      // Rls, Rrs
+            self.encode_element_mono(pcm, workspace, &mut bw, num, 7, true);  // LFE
         } else {
-            // Unsupported config — return error or emit verbatim.
-            // Returning error since verbatim fallback for random bit depths is undefined.
-            Err(AlacError::UnsupportedConfig { channels: channels as u32, bit_depth })
+            return Err(AlacError::UnsupportedConfig {
+                channels: channels as u32,
+                bit_depth,
+            });
         }
+
+        bw.write(TYPE_END, 3);
+        Ok(bw.finish())
+    }
+
+    pub fn encode_frame_partial(
+        &mut self,
+        pcm: &[u8],
+        _samples: usize,
+        workspace: &mut [i32],
+        out: &mut [u8],
+    ) -> Result<usize, AlacError> {
+        self.encode(pcm, workspace, out)
     }
 
     /// Encode stereo 16-bit: the primary optimized path.
-    fn encode_stereo_16(&mut self, pcm: &[u8], out: &mut [u8], num: usize) -> usize {
+
+    // Generic deinterleaver
+    fn deinterleave_generic(
+        pcm: &[u8],
+        out_l: &mut [i32],
+        mut out_r: Option<&mut [i32]>,
+        num: usize,
+        total_channels: usize,
+        ch_offset: usize,
+        bit_depth: u32,
+    ) {
+        let bytes_per_sample = (bit_depth / 8) as usize;
+        let stride = total_channels * bytes_per_sample;
+
+        for i in 0..num {
+            let base = i * stride + ch_offset * bytes_per_sample;
+            if bit_depth == 16 {
+                out_l[i] = i16::from_le_bytes([pcm[base], pcm[base + 1]]) as i32;
+                if let Some(ref mut r) = out_r {
+                    let r_base = base + bytes_per_sample;
+                    r[i] = i16::from_le_bytes([pcm[r_base], pcm[r_base + 1]]) as i32;
+                }
+            } else if bit_depth == 24 {
+                let mut val_l =
+                    pcm[base] as u32 | (pcm[base + 1] as u32) << 8 | (pcm[base + 2] as u32) << 16;
+                if val_l & 0x800000 != 0 {
+                    val_l |= 0xFF000000;
+                }
+                out_l[i] = val_l as i32;
+
+                if let Some(ref mut r) = out_r {
+                    let r_base = base + bytes_per_sample;
+                    let mut val_r = pcm[r_base] as u32
+                        | (pcm[r_base + 1] as u32) << 8
+                        | (pcm[r_base + 2] as u32) << 16;
+                    if val_r & 0x800000 != 0 {
+                        val_r |= 0xFF000000;
+                    }
+                    r[i] = val_r as i32;
+                }
+            }
+        }
+    }
+
+    fn encode_element_stereo(
+        &mut self,
+        pcm: &[u8],
+        workspace: &mut [i32],
+        bw: &mut BitWriter,
+        num: usize,
+        ch_offset: usize,
+    ) {
+        let bit_depth = self.config.bit_depth;
+        let ws = Workspace::new(workspace, self.config.frame_size as usize);
         let order = DEFAULT_ORDER;
         let denshift = DEFAULT_DENSHIFT;
-        let chan_bits = 17u32; // 16 + 1 for matrix encoding
+        let chan_bits = bit_depth + 1;
         let mix_bits: i32 = 2;
 
-        // SIMD-accelerated deinterleave.
-        simd::deinterleave_s16le(pcm, &mut self.left, &mut self.right, num);
+        Self::deinterleave_generic(
+            pcm,
+            ws.left,
+            Some(ws.right),
+            num,
+            self.config.channels as usize,
+            ch_offset,
+            bit_depth,
+        );
 
-        // Search for best mixRes (0, 1, or 2).
         let mut best_bits = u32::MAX;
         let mut best_mix_res: i32 = self.last_mix_res;
 
-        for mr in 0..=2i32 {
-            self.apply_mix(num, mix_bits, mr);
+        let shift = if bit_depth == 24 { 8 } else { 0 };
 
-            // Clone predictors so the search doesn't modify the real state.
+        for mr in 0..=2i32 {
+            simd::apply_mix(num, mix_bits, mr, ws.left, ws.right, ws.mix_u, ws.mix_v);
+
+            if shift > 0 {
+                for i in 0..num {
+                    ws.mix_u[i] >>= shift;
+                    ws.mix_v[i] >>= shift;
+                }
+            }
+
             let mut pu = self.pred_u.clone();
             let mut pv = self.pred_v.clone();
-            pu.encode(&self.mix_u, &mut self.residuals_u, num);
-            pv.encode(&self.mix_v, &mut self.residuals_v, num);
+            pu.encode(ws.mix_u, ws.residuals_u, num);
+            pv.encode(ws.mix_v, ws.residuals_v, num);
 
-            let bits_u = golomb::estimate_bits(&self.residuals_u, num);
-            let bits_v = golomb::estimate_bits(&self.residuals_v, num);
-            let total = bits_u + bits_v;
-
+            let total = golomb::estimate_bits(ws.residuals_u, num)
+                + golomb::estimate_bits(ws.residuals_v, num);
             if total < best_bits {
                 best_bits = total;
                 best_mix_res = mr;
             }
         }
 
-        // Re-encode with best mixRes, this time modifying predictor state.
-        self.apply_mix(num, mix_bits, best_mix_res);
-        self.pred_u.encode(&self.mix_u, &mut self.residuals_u, num);
-        self.pred_v.encode(&self.mix_v, &mut self.residuals_v, num);
-        self.last_mix_res = best_mix_res;
-
-        // Write compressed frame.
-        let compressed_size = self.write_compressed_stereo(
-            out,
+        simd::apply_mix(
             num,
-            order,
-            denshift,
-            chan_bits,
             mix_bits,
             best_mix_res,
+            ws.left,
+            ws.right,
+            ws.mix_u,
+            ws.mix_v,
         );
 
-        // Compare with verbatim size.
-        let verbatim_size = self.verbatim_size(num, 2, 16);
-        if compressed_size >= verbatim_size {
-            return self.encode_verbatim(pcm, out, num, 2, 16);
-        }
-
-        compressed_size
-    }
-
-    /// Encode stereo 24-bit: 24-bit samples packed as S24LE (3 bytes per sample).
-    ///
-    /// ALAC 24-bit uses `extraBytes=1` — the extra byte per sample is written
-    /// separately from the compressed residuals (the "extra" LSB is peeled off
-    /// and stored verbatim, while the upper 16 bits go through prediction +
-    /// Golomb-Rice). This matches vendor's reference encoder behavior.
-    fn encode_stereo_24(&mut self, pcm: &[u8], out: &mut [u8], num: usize) -> usize {
-        let order = DEFAULT_ORDER;
-        let denshift = DEFAULT_DENSHIFT;
-        let chan_bits = 25u32; // 24 + 1 for matrix encoding
-        let mix_bits: i32 = 2;
-        let extra_bytes: u32 = 1; // 24-bit mode: 1 extra byte per sample
-        let shift: u32 = 8; // Shift off bottom 8 bits for extra storage
-
-        // Deinterleave 24-bit packed PCM.
-        simd::deinterleave_s24le(pcm, &mut self.left, &mut self.right, num);
-
-        // Search for best mixRes.
-        let mut best_bits = u32::MAX;
-        let mut best_mix_res: i32 = self.last_mix_res;
-
-        for mr in 0..=2i32 {
-            self.apply_mix(num, mix_bits, mr);
-
-            // Shift down for prediction (predict on upper bits only).
+        if bit_depth == 24 {
+            let extra_u: alloc::vec::Vec<u8> =
+                ws.mix_u[..num].iter().map(|&s| (s & 0xFF) as u8).collect();
+            let extra_v: alloc::vec::Vec<u8> =
+                ws.mix_v[..num].iter().map(|&s| (s & 0xFF) as u8).collect();
             for i in 0..num {
-                self.mix_u[i] >>= shift;
-                self.mix_v[i] >>= shift;
+                ws.mix_u[i] >>= shift;
+                ws.mix_v[i] >>= shift;
             }
 
-            let mut pu = self.pred_u.clone();
-            let mut pv = self.pred_v.clone();
-            pu.encode(&self.mix_u, &mut self.residuals_u, num);
-            pv.encode(&self.mix_v, &mut self.residuals_v, num);
+            self.pred_u.encode(ws.mix_u, ws.residuals_u, num);
+            self.pred_v.encode(ws.mix_v, ws.residuals_v, num);
+            self.last_mix_res = best_mix_res;
 
-            let bits_u = golomb::estimate_bits(&self.residuals_u, num);
-            let bits_v = golomb::estimate_bits(&self.residuals_v, num);
-            let total = bits_u + bits_v;
+            self.write_compressed_element_stereo_24(
+                bw,
+                num,
+                order,
+                denshift,
+                chan_bits,
+                mix_bits,
+                best_mix_res,
+                1,
+                &extra_u,
+                &extra_v,
+                ws.residuals_u,
+                ws.residuals_v,
+            );
+        } else {
+            self.pred_u.encode(ws.mix_u, ws.residuals_u, num);
+            self.pred_v.encode(ws.mix_v, ws.residuals_v, num);
+            self.last_mix_res = best_mix_res;
 
-            if total < best_bits {
-                best_bits = total;
-                best_mix_res = mr;
-            }
+            self.write_compressed_element_stereo(
+                bw,
+                num,
+                order,
+                denshift,
+                chan_bits,
+                mix_bits,
+                best_mix_res,
+                ws.residuals_u,
+                ws.residuals_v,
+            );
         }
-
-        // Re-encode with best mixRes.
-        self.apply_mix(num, mix_bits, best_mix_res);
-
-        // Save the full-resolution mixed values for extra byte extraction.
-        // Extra bytes = bottom `shift` bits of the mixed signal.
-        let extra_u: Vec<u8> = self.mix_u.iter().map(|&s| (s & 0xFF) as u8).collect();
-        let extra_v: Vec<u8> = self.mix_v.iter().map(|&s| (s & 0xFF) as u8).collect();
-
-        // Shift down for prediction.
-        for i in 0..num {
-            self.mix_u[i] >>= shift;
-            self.mix_v[i] >>= shift;
-        }
-
-        self.pred_u.encode(&self.mix_u, &mut self.residuals_u, num);
-        self.pred_v.encode(&self.mix_v, &mut self.residuals_v, num);
-        self.last_mix_res = best_mix_res;
-
-        // Write compressed frame with extra bytes.
-        let compressed_size = self.write_compressed_stereo_24(
-            out,
-            num,
-            order,
-            denshift,
-            chan_bits,
-            mix_bits,
-            best_mix_res,
-            extra_bytes,
-            &extra_u,
-            &extra_v,
-        );
-
-        let verbatim_size = self.verbatim_size(num, 2, 24);
-        if compressed_size >= verbatim_size {
-            return self.encode_verbatim(pcm, out, num, 2, 24);
-        }
-
-        compressed_size
     }
 
-    /// Encode mono 16-bit.
-    fn encode_mono_16(&mut self, pcm: &[u8], out: &mut [u8], num: usize) -> usize {
-        // Deinterleave mono (just byte-swap S16LE → i32).
-        for i in 0..num {
-            self.mix_u[i] = i16::from_le_bytes([pcm[i * 2], pcm[i * 2 + 1]]) as i32;
-        }
+    fn encode_element_mono(
+        &mut self,
+        pcm: &[u8],
+        workspace: &mut [i32],
+        bw: &mut BitWriter,
+        num: usize,
+        ch_offset: usize,
+        is_lfe: bool,
+    ) {
+        let ws = Workspace::new(workspace, self.config.frame_size as usize);
+        let bit_depth = self.config.bit_depth;
+        Self::deinterleave_generic(
+            pcm,
+            ws.mix_u,
+            None,
+            num,
+            self.config.channels as usize,
+            ch_offset,
+            bit_depth,
+        );
 
-        self.pred_u.encode(&self.mix_u, &mut self.residuals_u, num);
+        // ALAC doesn't typically compress 24-bit mono with extra bytes, but for simplicity we'll just compress the top bits if needed,
+        // or just fallback. Actually, Apple's mono uses extra bytes too for 24 bit.
+        // For phase 1, we just predict and encode as 16 or 24 directly.
+        self.pred_u.encode(ws.mix_u, ws.residuals_u, num);
 
         let order = DEFAULT_ORDER;
         let denshift = DEFAULT_DENSHIFT;
-        let chan_bits = 16u32;
 
-        let compressed_size = self.write_compressed_mono(out, num, order, denshift, chan_bits);
+        let tag = if is_lfe { TYPE_LFE } else { TYPE_SCE };
 
-        let verbatim_size = self.verbatim_size(num, 1, 16);
-        if compressed_size >= verbatim_size {
-            return self.encode_verbatim(pcm, out, num, 1, 16);
-        }
-
-        compressed_size
-    }
-
-    /// Apply middle-side stereo decorrelation.
-    ///
-    /// u = (L + (m - r) * R) / m
-    /// v = L - R
-    ///
-    /// where m = 1 << mix_bits, r = mix_res.
-    fn apply_mix(&mut self, num: usize, mix_bits: i32, mix_res: i32) {
-        let m = 1i32 << mix_bits;
-        for i in 0..num {
-            let l = self.left[i];
-            let r = self.right[i];
-            self.mix_u[i] = (l + (m - mix_res) * r) / m;
-            self.mix_v[i] = l - r;
-        }
-    }
-
-    /// Write a compressed stereo ALAC frame.
-    #[allow(clippy::too_many_arguments)]
-    fn write_compressed_stereo(
-        &self,
-        out: &mut [u8],
-        num: usize,
-        order: usize,
-        denshift: u32,
-        _chan_bits: u32,
-        mix_bits: i32,
-        mix_res: i32,
-    ) -> usize {
-        let mut bw = BitWriter::new(out);
         let partial = num != self.config.frame_size as usize;
-
-        // Element header: CPE.
-        bw.write(TYPE_CPE, 3);
-        bw.write(0, 4); // elementInstanceTag
-        bw.write(0, 12); // unused
-
-        // Flags byte: 0000psse
-        let p = if partial { 1u32 } else { 0 };
-        bw.write(p, 1); // partial frame
-        bw.write(0, 2); // extraBytes = 0 (16-bit)
-        bw.write(0, 1); // escape = 0 (compressed)
-
-        if partial {
-            bw.write(num as u32, 32);
-        }
-
-        // Mix parameters.
-        bw.write(mix_bits as u32, 8);
-        bw.write(mix_res as u32 & 0xFF, 8);
-
-        // Channel U prediction params.
-        bw.write(0, 4); // modeU = 0
-        bw.write(denshift, 4); // denShiftU
-        bw.write(PB_FACTOR, 3); // pbFactorU
-        bw.write(order as u32, 5); // numU
-        for i in 0..order {
-            bw.write(self.pred_u.coefs[i] as u16 as u32, 16);
-        }
-
-        // Channel V prediction params.
-        bw.write(0, 4); // modeV = 0
-        bw.write(denshift, 4); // denShiftV
-        bw.write(PB_FACTOR, 3); // pbFactorV
-        bw.write(order as u32, 5); // numV
-        for i in 0..order {
-            bw.write(self.pred_v.coefs[i] as u16 as u32, 16);
-        }
-
-        // Entropy-encoded residuals.
-        golomb::encode_residuals(&self.residuals_u, num, &mut bw);
-        golomb::encode_residuals(&self.residuals_v, num, &mut bw);
-
-        // End tag.
-        bw.write(TYPE_END, 3);
-        bw.finish()
-    }
-
-    /// Write a compressed stereo 24-bit ALAC frame with extra bytes.
-    #[allow(clippy::too_many_arguments)]
-    fn write_compressed_stereo_24(
-        &self,
-        out: &mut [u8],
-        num: usize,
-        order: usize,
-        denshift: u32,
-        _chan_bits: u32,
-        mix_bits: i32,
-        mix_res: i32,
-        extra_bytes: u32,
-        extra_u: &[u8],
-        extra_v: &[u8],
-    ) -> usize {
-        let mut bw = BitWriter::new(out);
-        let partial = num != self.config.frame_size as usize;
-
-        // Element header: CPE.
-        bw.write(TYPE_CPE, 3);
-        bw.write(0, 4); // elementInstanceTag
-        bw.write(0, 12); // unused
-
-        // Flags byte: 0000psse
-        let p = if partial { 1u32 } else { 0 };
-        bw.write(p, 1); // partial frame
-        bw.write(extra_bytes, 2); // extraBytes = 1 for 24-bit
-        bw.write(0, 1); // escape = 0 (compressed)
-
-        if partial {
-            bw.write(num as u32, 32);
-        }
-
-        // Mix parameters.
-        bw.write(mix_bits as u32, 8);
-        bw.write(mix_res as u32 & 0xFF, 8);
-
-        // Channel U prediction params.
-        bw.write(0, 4);
-        bw.write(denshift, 4);
-        bw.write(PB_FACTOR, 3);
-        bw.write(order as u32, 5);
-        for i in 0..order {
-            bw.write(self.pred_u.coefs[i] as u16 as u32, 16);
-        }
-
-        // Channel V prediction params.
-        bw.write(0, 4);
-        bw.write(denshift, 4);
-        bw.write(PB_FACTOR, 3);
-        bw.write(order as u32, 5);
-        for i in 0..order {
-            bw.write(self.pred_v.coefs[i] as u16 as u32, 16);
-        }
-
-        // Extra bytes (LSBs): interleaved U/V, 8 bits each.
-        for i in 0..num {
-            bw.write(extra_u[i] as u32, 8);
-            bw.write(extra_v[i] as u32, 8);
-        }
-
-        // Entropy-encoded residuals (upper bits).
-        golomb::encode_residuals(&self.residuals_u, num, &mut bw);
-        golomb::encode_residuals(&self.residuals_v, num, &mut bw);
-
-        // End tag.
-        bw.write(TYPE_END, 3);
-        bw.finish()
-    }
-
-    /// Write a compressed mono ALAC frame.
-    fn write_compressed_mono(
-        &self,
-        out: &mut [u8],
-        num: usize,
-        order: usize,
-        denshift: u32,
-        _chan_bits: u32,
-    ) -> usize {
-        let mut bw = BitWriter::new(out);
-        let partial = num != self.config.frame_size as usize;
-
-        bw.write(TYPE_SCE, 3);
+        bw.write(tag, 3);
         bw.write(0, 4);
         bw.write(0, 12);
 
@@ -447,7 +395,6 @@ impl AlacEncoder {
             bw.write(num as u32, 32);
         }
 
-        // Mono has no mix params — just prediction params.
         bw.write(0, 4);
         bw.write(denshift, 4);
         bw.write(PB_FACTOR, 3);
@@ -456,11 +403,102 @@ impl AlacEncoder {
             bw.write(self.pred_u.coefs[i] as u16 as u32, 16);
         }
 
-        golomb::encode_residuals(&self.residuals_u, num, &mut bw);
-        bw.write(TYPE_END, 3);
-        bw.finish()
+        golomb::encode_residuals(ws.residuals_u, num, bw);
     }
 
+    // Extracted writers that don't finish
+    fn write_compressed_element_stereo(
+        &self,
+        bw: &mut BitWriter,
+        num: usize,
+        order: usize,
+        denshift: u32,
+        _chan_bits: u32,
+        mix_bits: i32,
+        mix_res: i32,
+        residuals_u: &[i32],
+        residuals_v: &[i32],
+    ) {
+        let partial = num != self.config.frame_size as usize;
+        bw.write(TYPE_CPE, 3);
+        bw.write(0, 4);
+        bw.write(0, 12);
+        let p = if partial { 1u32 } else { 0 };
+        bw.write(p, 1);
+        bw.write(0, 2);
+        bw.write(0, 1);
+        if partial {
+            bw.write(num as u32, 32);
+        }
+        bw.write(mix_bits as u32, 8);
+        bw.write(mix_res as u32 & 0xFF, 8);
+        bw.write(0, 4);
+        bw.write(denshift, 4);
+        bw.write(PB_FACTOR, 3);
+        bw.write(order as u32, 5);
+        for i in 0..order {
+            bw.write(self.pred_u.coefs[i] as u16 as u32, 16);
+        }
+        bw.write(0, 4);
+        bw.write(denshift, 4);
+        bw.write(PB_FACTOR, 3);
+        bw.write(order as u32, 5);
+        for i in 0..order {
+            bw.write(self.pred_v.coefs[i] as u16 as u32, 16);
+        }
+        golomb::encode_residuals(residuals_u, num, bw);
+        golomb::encode_residuals(residuals_v, num, bw);
+    }
+
+    fn write_compressed_element_stereo_24(
+        &self,
+        bw: &mut BitWriter,
+        num: usize,
+        order: usize,
+        denshift: u32,
+        _chan_bits: u32,
+        mix_bits: i32,
+        mix_res: i32,
+        extra_bytes: u32,
+        extra_u: &[u8],
+        extra_v: &[u8],
+        residuals_u: &[i32],
+        residuals_v: &[i32],
+    ) {
+        let partial = num != self.config.frame_size as usize;
+        bw.write(TYPE_CPE, 3);
+        bw.write(0, 4);
+        bw.write(0, 12);
+        let p = if partial { 1u32 } else { 0 };
+        bw.write(p, 1);
+        bw.write(extra_bytes, 2);
+        bw.write(0, 1);
+        if partial {
+            bw.write(num as u32, 32);
+        }
+        bw.write(mix_bits as u32, 8);
+        bw.write(mix_res as u32 & 0xFF, 8);
+        bw.write(0, 4);
+        bw.write(denshift, 4);
+        bw.write(PB_FACTOR, 3);
+        bw.write(order as u32, 5);
+        for i in 0..order {
+            bw.write(self.pred_u.coefs[i] as u16 as u32, 16);
+        }
+        bw.write(0, 4);
+        bw.write(denshift, 4);
+        bw.write(PB_FACTOR, 3);
+        bw.write(order as u32, 5);
+        for i in 0..order {
+            bw.write(self.pred_v.coefs[i] as u16 as u32, 16);
+        }
+        for i in 0..num {
+            bw.write(extra_u[i] as u32, 8);
+            bw.write(extra_v[i] as u32, 8);
+        }
+        golomb::encode_residuals(residuals_u, num, bw);
+        golomb::encode_residuals(residuals_v, num, bw);
+    }
     /// Write a verbatim (uncompressed) ALAC frame.
     fn encode_verbatim(
         &self,
@@ -528,6 +566,10 @@ impl AlacEncoder {
 
 #[cfg(test)]
 mod tests {
+    extern crate alloc;
+    use alloc::vec::Vec;
+    use alloc::vec;
+    extern crate std;
     use super::*;
 
     fn make_pcm_silence(num_samples: usize) -> Vec<u8> {
@@ -551,10 +593,12 @@ mod tests {
     #[test]
     fn test_encode_silence() {
         let config = AlacConfig::default();
-        let mut enc = AlacEncoder::new(config);
+        let mut enc = AlacEncoder::new(config.clone());
         let pcm = make_pcm_silence(352);
         let mut out = vec![0u8; 8192];
-        let n = enc.encode(&pcm, &mut out).unwrap();
+        let mut workspace =
+            vec![0i32; AlacEncoder::required_workspace(config.channels, config.frame_size)];
+        let n = enc.encode(&pcm, &mut workspace, &mut out).unwrap();
 
         // Silence should compress very well — much smaller than verbatim (1416 bytes).
         assert!(n > 0, "encoded 0 bytes");
@@ -564,10 +608,12 @@ mod tests {
     #[test]
     fn test_encode_sine() {
         let config = AlacConfig::default();
-        let mut enc = AlacEncoder::new(config);
+        let mut enc = AlacEncoder::new(config.clone());
         let pcm = make_pcm_sine(352);
         let mut out = vec![0u8; 8192];
-        let n = enc.encode(&pcm, &mut out).unwrap();
+        let mut workspace =
+            vec![0i32; AlacEncoder::required_workspace(config.channels, config.frame_size)];
+        let n = enc.encode(&pcm, &mut workspace, &mut out).unwrap();
 
         // Sine should compress meaningfully vs verbatim (~1416 bytes).
         assert!(n > 0, "encoded 0 bytes");
@@ -584,13 +630,14 @@ mod tests {
     fn test_encode_multiple_frames() {
         // Verify encoder state persists across frames for better compression.
         let config = AlacConfig::default();
-        let mut enc = AlacEncoder::new(config);
+        let mut enc = AlacEncoder::new(config.clone());
         let pcm = make_pcm_sine(352);
         let mut out = vec![0u8; 8192];
 
         let mut sizes = Vec::new();
         for _ in 0..10 {
-            let n = enc.encode(&pcm, &mut out).unwrap();
+            let mut workspace = vec![0i32; AlacEncoder::required_workspace(config.channels, config.frame_size)];
+            let n = enc.encode(&pcm, &mut workspace, &mut out).unwrap();
             sizes.push(n);
         }
 
@@ -636,13 +683,16 @@ mod tests {
         let config = AlacConfig {
             frame_size: 352,
             channels: 2,
+            layout: ChannelLayout::Stereo,
             bit_depth: 24,
             sample_rate: 48000,
         };
-        let mut enc = AlacEncoder::new(config);
+        let mut enc = AlacEncoder::new(config.clone());
         let pcm = make_pcm_silence_24(352);
         let mut out = vec![0u8; 16384];
-        let n = enc.encode(&pcm, &mut out).unwrap();
+        let mut workspace =
+            vec![0i32; AlacEncoder::required_workspace(config.channels, config.frame_size)];
+        let n = enc.encode(&pcm, &mut workspace, &mut out).unwrap();
 
         assert!(n > 0, "encoded 0 bytes");
         // Silence should compress well — verbatim 24-bit stereo is ~2112 bytes.
@@ -659,13 +709,16 @@ mod tests {
         let config = AlacConfig {
             frame_size: 352,
             channels: 2,
+            layout: ChannelLayout::Stereo,
             bit_depth: 24,
             sample_rate: 48000,
         };
-        let mut enc = AlacEncoder::new(config);
+        let mut enc = AlacEncoder::new(config.clone());
         let pcm = make_pcm_sine_24(352);
         let mut out = vec![0u8; 16384];
-        let n = enc.encode(&pcm, &mut out).unwrap();
+        let mut workspace =
+            vec![0i32; AlacEncoder::required_workspace(config.channels, config.frame_size)];
+        let n = enc.encode(&pcm, &mut workspace, &mut out).unwrap();
 
         assert!(n > 0, "encoded 0 bytes");
         let verbatim_approx = 352 * 2 * 3; // ~2112 bytes raw
@@ -682,16 +735,18 @@ mod tests {
         let config = AlacConfig {
             frame_size: 352,
             channels: 2,
+            layout: ChannelLayout::Stereo,
             bit_depth: 24,
             sample_rate: 48000,
         };
-        let mut enc = AlacEncoder::new(config);
+        let mut enc = AlacEncoder::new(config.clone());
         let pcm = make_pcm_sine_24(352);
         let mut out = vec![0u8; 16384];
 
         let mut sizes = Vec::new();
         for _ in 0..10 {
-            let n = enc.encode(&pcm, &mut out).unwrap();
+            let mut workspace = vec![0i32; AlacEncoder::required_workspace(config.channels, config.frame_size)];
+            let n = enc.encode(&pcm, &mut workspace, &mut out).unwrap();
             sizes.push(n);
         }
 

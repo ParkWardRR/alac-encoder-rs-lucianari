@@ -1,0 +1,29 @@
+syntax = "proto3";
+
+package alac;
+
+option go_package = "github.com/lucianari/alac-encoder-rs-lucianari/go/proto";
+
+service AlacEncoder {
+  // Encodes a stream of raw PCM audio into ALAC frames.
+  rpc EncodeStream(stream EncodeRequest) returns (stream EncodeResponse) {}
+}
+
+message Config {
+  uint32 frame_size = 1;
+  uint32 channels = 2;
+  uint32 layout = 3;
+  uint32 bit_depth = 4;
+  uint32 sample_rate = 5;
+}
+
+message EncodeRequest {
+  oneof payload {
+    Config config = 1;      // Send this first to initialize the encoder on the server
+    bytes pcm_chunk = 2;    // Subsequent raw PCM audio data
+  }
+}
+
+message EncodeResponse {
+  bytes alac_chunk = 1;
+}

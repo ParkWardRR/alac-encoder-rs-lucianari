@@ -131,6 +131,9 @@ fn sign_of(i: i32) -> i32 {
 
 #[cfg(test)]
 mod tests {
+    extern crate alloc;
+    use alloc::vec::Vec;
+    use alloc::vec;
     use super::*;
 
     #[test]

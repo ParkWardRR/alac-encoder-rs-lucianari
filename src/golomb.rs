@@ -23,63 +23,58 @@ const MAX_DATA_BITS_16: u32 = 16;
 ///
 /// Then Rice-coded with an adaptive parameter k derived from the running mean.
 pub fn encode_residuals(residuals: &[i32], num: usize, bw: &mut BitWriter) {
-    let mut mb: i32 = MB0; // running mean estimate (scaled by 4)
+    let mut mb: i32 = MB0;
 
-    for &val in residuals.iter().take(num) {
-        // Zig-zag encode: signed → unsigned.
-        let uval: u32 = if val >= 0 {
-            (val as u32) << 1
-        } else {
-            (((-val) as u32) << 1) - 1
-        };
+    let mut i = 0;
+    while i < num {
+        let chunk_size = (num - i).min(32);
+        let mut uvals = [0u32; 32];
 
-        // Compute Rice parameter k from current mean estimate.
-        let k = calc_k(mb);
-
-        // Rice encode: quotient in unary + remainder in k bits.
-        let q = uval >> k;
-        let r = uval & ((1u32 << k) - 1);
-
-        if q < MAX_PREFIX_16 {
-            // Normal case: unary quotient + binary remainder.
-            // Unary: q ones followed by a zero.
-            // Optimization: write up to 8 ones at a time.
-            let mut remaining = q;
-            while remaining >= 8 {
-                bw.write(0xFF, 8);
-                remaining -= 8;
-            }
-            if remaining > 0 {
-                bw.write((1u32 << remaining) - 1, remaining);
-            }
-            bw.write(0, 1); // terminator zero
-
-            // Remainder in k bits.
-            if k > 0 {
-                bw.write(r, k);
-            }
-        } else {
-            // Escape: MAX_PREFIX ones + raw value in MAX_DATA_BITS bits.
-            // This handles outliers that would produce very long unary codes.
-            let mut remaining = MAX_PREFIX_16;
-            while remaining >= 8 {
-                bw.write(0xFF, 8);
-                remaining -= 8;
-            }
-            if remaining > 0 {
-                bw.write((1u32 << remaining) - 1, remaining);
-            }
-            bw.write(uval, MAX_DATA_BITS_16);
+        // Auto-vectorizable branchless zig-zag encoding
+        for j in 0..chunk_size {
+            let val = residuals[i + j];
+            uvals[j] = ((val << 1) ^ (val >> 31)) as u32;
         }
 
-        // Update running mean estimate (exponential moving average).
-        // mb ≈ 4 * mean(|residual|)
-        // Update: mb += (uval - mb/4), clamped to [1, 0xFFFF].
-        mb += uval as i32 - (mb >> 2);
-        mb = mb.clamp(1, 0xFFFF);
+        for j in 0..chunk_size {
+            let uval = uvals[j];
+            let k = calc_k(mb);
+
+            let q = uval >> k;
+            let r = uval & ((1u32 << k) - 1);
+
+            if q < MAX_PREFIX_16 {
+                let mut remaining = q;
+                while remaining >= 8 {
+                    bw.write(0xFF, 8);
+                    remaining -= 8;
+                }
+                if remaining > 0 {
+                    bw.write((1u32 << remaining) - 1, remaining);
+                }
+                bw.write(0, 1);
+
+                if k > 0 {
+                    bw.write(r, k);
+                }
+            } else {
+                let mut remaining = MAX_PREFIX_16;
+                while remaining >= 8 {
+                    bw.write(0xFF, 8);
+                    remaining -= 8;
+                }
+                if remaining > 0 {
+                    bw.write((1u32 << remaining) - 1, remaining);
+                }
+                bw.write(uval, MAX_DATA_BITS_16);
+            }
+
+            mb += uval as i32 - (mb >> 2);
+            mb = mb.clamp(1, 0xFFFF);
+        }
+        i += chunk_size;
     }
 }
-
 /// Compute the Rice parameter k from the running mean estimate.
 ///
 /// k = ceil(log2(mean)), where mean ≈ mb/4.
@@ -101,24 +96,31 @@ pub fn estimate_bits(residuals: &[i32], num: usize) -> u32 {
     let mut mb: i32 = MB0;
     let mut total_bits: u32 = 0;
 
-    for &val in residuals.iter().take(num) {
-        let uval: u32 = if val >= 0 {
-            (val as u32) << 1
-        } else {
-            (((-val) as u32) << 1) - 1
-        };
+    let mut i = 0;
+    while i < num {
+        let chunk_size = (num - i).min(32);
+        let mut uvals = [0u32; 32];
 
-        let k = calc_k(mb);
-        let q = uval >> k;
-
-        if q < MAX_PREFIX_16 {
-            total_bits += q + 1 + k; // unary(q) + zero + remainder(k)
-        } else {
-            total_bits += MAX_PREFIX_16 + MAX_DATA_BITS_16; // escape
+        for j in 0..chunk_size {
+            let val = residuals[i + j];
+            uvals[j] = ((val << 1) ^ (val >> 31)) as u32;
         }
 
-        mb += uval as i32 - (mb >> 2);
-        mb = mb.clamp(1, 0xFFFF);
+        for j in 0..chunk_size {
+            let uval = uvals[j];
+            let k = calc_k(mb);
+            let q = uval >> k;
+
+            if q < MAX_PREFIX_16 {
+                total_bits += q + 1 + k;
+            } else {
+                total_bits += MAX_PREFIX_16 + MAX_DATA_BITS_16;
+            }
+
+            mb += uval as i32 - (mb >> 2);
+            mb = mb.clamp(1, 0xFFFF);
+        }
+        i += chunk_size;
     }
 
     total_bits
@@ -126,6 +128,9 @@ pub fn estimate_bits(residuals: &[i32], num: usize) -> u32 {
 
 #[cfg(test)]
 mod tests {
+    extern crate alloc;
+    use alloc::vec::Vec;
+    use alloc::vec;
     use super::*;
 
     #[test]
