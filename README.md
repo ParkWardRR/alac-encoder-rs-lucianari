@@ -67,3 +67,15 @@ To run the fuzzer (requires `cargo-fuzz` and nightly Rust):
 ```bash
 cargo +nightly fuzz run encode
 ```
+
+
+## Local CI Testing (OrbStack + Act)
+This repository is configured for local, completely free CI testing powered by [OrbStack](https://orbstack.dev/) and [act](https://github.com/nektos/act). We deliberately keep the CI workflow definitions out of `.github/` to prevent remote execution and quota consumption.
+
+To run the full test suite locally:
+1. Ensure OrbStack is running.
+2. Install `act` (e.g., `brew install act`).
+3. Run the following command from the root of the repository:
+   ```bash
+   act -W .local-ci/workflows
+   ```
