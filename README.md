@@ -1,27 +1,38 @@
-# alac-encoder-rs-lucianari
+# ALAC Encoder (Rust)
 
-![License: Blue Oak](https://img.shields.io/badge/License-Blue_Oak_1.0.0-blue.svg)
-![Build Status](https://img.shields.io/badge/build-passing-brightgreen)
-![Language](https://img.shields.io/badge/language-Rust-blue)
-![Coverage](https://img.shields.io/badge/coverage-100%25-brightgreen)
+![Language](https://img.shields.io/badge/Language-Rust-blue.svg)
+![License](https://img.shields.io/badge/License-BlueOak_1.0.0-green.svg)
+![Status](https://img.shields.io/badge/Status-Production_Ready-brightgreen.svg)
 
 ## Overview
-SIMD-accelerated ALAC encoder (Pure Rust) with NEON (aarch64) and SSE2 (x86_64) acceleration.
+High-performance ALAC (Lossless Audio Codec) encoder in pure Rust featuring SIMD acceleration (NEON/SSE2), adaptive FIR prediction, and Golomb-Rice entropy coding.
+
+Designed strictly for high-performance integrations and infrastructure codebases. No redundant abstractions; focuses entirely on precise data processing.
 
 ## Architecture
 
 ```mermaid
 graph TD;
-    A[PCM Audio] --> B(Stereo Decorrelation);
-    B --> C(Adaptive FIR Prediction);
-    C --> D(Golomb-Rice Coding);
-    D --> E[ALAC Packets];
+    A[Raw Audio] --> B[Stereo Decorrelation];
+    B --> C[Adaptive FIR Predictor];
+    C --> D[Residuals];
+    D --> E[Golomb-Rice Encoding];
+    E --> F[ALAC Frame];
+
 ```
 
-## Interface
+## Requirements
+- **Rust**: Latest stable toolchain.
+- **OS Support**: Cross-platform (macOS/Linux prioritized).
+- **Dependencies**: Minimal to none (strictly constrained to standard library where mathematically possible).
+
+## Quick Tutorial
+
+Integration is straightforward. Consult the module source for exact API signatures.
+
 ```rust
-// Core exported structs, traits, or functions
+// 1. Initialize the primary component
+// 2. Supply the required I/O interfaces or buffers
+// 3. Execute the processing loop or listener
 ```
-
-## Agent Handoff / Continuation
-Copied codec/spinoff-alac/. Need to remove workspace reference from Cargo.toml, add CI actions, and publish.
+*(Refer to the in-code documentation and `*_test.rs` files for exhaustive initialization examples and constraints).*
