@@ -1,13 +1,15 @@
 # Engineering Roadmap
 
 ## Short-term
-- Achieve 100% test coverage across all boundary conditions.
-- Finalize CI/CD pipeline integration (linting, testing, release).
+- Finalize 1.0.0 API freeze.
+- Establish community guidelines and contribution workflow.
+- Expand documentation with advanced real-world integration examples.
 
 ## Mid-term
-- Benchmark and optimize inner loops.
-- Implement exhaustive fuzz testing.
+- Explore zero-copy I/O capabilities and further allocations reduction.
+- Add cross-platform builds for niche architectures.
+- Conduct a third-party security and quality audit.
 
 ## Long-term
-- Explore zero-copy I/O capabilities if applicable.
-- Finalize 1.0.0 API freeze.
+- Support for hardware-accelerated offloading (where applicable).
+- Seamless integration into larger framework ecosystems and package managers.
