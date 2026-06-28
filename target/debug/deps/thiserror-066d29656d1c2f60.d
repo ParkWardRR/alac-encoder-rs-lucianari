@@ -1,0 +1,14 @@
+/Users/twesh/Antigravity/spinoffs/alac-encoder-rs-lucianari/target/debug/deps/thiserror-066d29656d1c2f60.d: /Users/twesh/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/lib.rs /Users/twesh/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/aserror.rs /Users/twesh/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/display.rs /Users/twesh/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/var.rs /Users/twesh/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/private.rs /Users/twesh/Antigravity/spinoffs/alac-encoder-rs-lucianari/target/debug/build/thiserror-3a73cca1b1369c1f/out/private.rs
+
+/Users/twesh/Antigravity/spinoffs/alac-encoder-rs-lucianari/target/debug/deps/libthiserror-066d29656d1c2f60.rlib: /Users/twesh/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/lib.rs /Users/twesh/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/aserror.rs /Users/twesh/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/display.rs /Users/twesh/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/var.rs /Users/twesh/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/private.rs /Users/twesh/Antigravity/spinoffs/alac-encoder-rs-lucianari/target/debug/build/thiserror-3a73cca1b1369c1f/out/private.rs
+
+/Users/twesh/Antigravity/spinoffs/alac-encoder-rs-lucianari/target/debug/deps/libthiserror-066d29656d1c2f60.rmeta: /Users/twesh/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/lib.rs /Users/twesh/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/aserror.rs /Users/twesh/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/display.rs /Users/twesh/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/var.rs /Users/twesh/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/private.rs /Users/twesh/Antigravity/spinoffs/alac-encoder-rs-lucianari/target/debug/build/thiserror-3a73cca1b1369c1f/out/private.rs
+
+/Users/twesh/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/lib.rs:
+/Users/twesh/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/aserror.rs:
+/Users/twesh/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/display.rs:
+/Users/twesh/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/var.rs:
+/Users/twesh/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/private.rs:
+/Users/twesh/Antigravity/spinoffs/alac-encoder-rs-lucianari/target/debug/build/thiserror-3a73cca1b1369c1f/out/private.rs:
+
+# env-dep:OUT_DIR=/Users/twesh/Antigravity/spinoffs/alac-encoder-rs-lucianari/target/debug/build/thiserror-3a73cca1b1369c1f/out

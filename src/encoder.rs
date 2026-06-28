@@ -17,6 +17,17 @@ const TYPE_END: u32 = 7; // End tag
 /// Adaptive Golomb pb_factor.
 const PB_FACTOR: u32 = 4;
 
+/// Errors that can occur during ALAC encoding.
+#[derive(thiserror::Error, Debug)]
+pub enum AlacError {
+    /// Provided output buffer is too small.
+    #[error("Output buffer too small: required {required}, provided {provided}")]
+    BufferTooSmall { required: usize, provided: usize },
+    /// Unsupported PCM configuration.
+    #[error("Unsupported PCM configuration: {channels} channels, {bit_depth} bits")]
+    UnsupportedConfig { channels: u32, bit_depth: u32 },
+}
+
 /// Encoder configuration.
 #[derive(Clone, Debug)]
 pub struct AlacConfig {
@@ -76,23 +87,24 @@ impl AlacEncoder {
 
     /// Encode a frame of interleaved S16LE PCM into an ALAC frame.
     ///
-    /// Returns the number of bytes written to `out`.
+    /// Returns the number of bytes written to `out`, or an `AlacError`.
     /// `pcm` must contain `frame_size * channels * (bit_depth/8)` bytes.
     /// `out` must be large enough (worst case: slightly larger than PCM).
-    pub fn encode(&mut self, pcm: &[u8], out: &mut [u8]) -> usize {
+    pub fn encode(&mut self, pcm: &[u8], out: &mut [u8]) -> Result<usize, AlacError> {
         let num = self.config.frame_size as usize;
         let channels = self.config.channels as usize;
         let bit_depth = self.config.bit_depth;
 
         if channels == 2 && bit_depth == 16 {
-            self.encode_stereo_16(pcm, out, num)
+            Ok(self.encode_stereo_16(pcm, out, num))
         } else if channels == 2 && bit_depth == 24 {
-            self.encode_stereo_24(pcm, out, num)
+            Ok(self.encode_stereo_24(pcm, out, num))
         } else if channels == 1 && bit_depth == 16 {
-            self.encode_mono_16(pcm, out, num)
+            Ok(self.encode_mono_16(pcm, out, num))
         } else {
-            // Unsupported config — emit verbatim.
-            self.encode_verbatim(pcm, out, num, channels, bit_depth as usize)
+            // Unsupported config — return error or emit verbatim.
+            // Returning error since verbatim fallback for random bit depths is undefined.
+            Err(AlacError::UnsupportedConfig { channels: channels as u32, bit_depth })
         }
     }
 
@@ -542,7 +554,7 @@ mod tests {
         let mut enc = AlacEncoder::new(config);
         let pcm = make_pcm_silence(352);
         let mut out = vec![0u8; 8192];
-        let n = enc.encode(&pcm, &mut out);
+        let n = enc.encode(&pcm, &mut out).unwrap();
 
         // Silence should compress very well — much smaller than verbatim (1416 bytes).
         assert!(n > 0, "encoded 0 bytes");
@@ -555,7 +567,7 @@ mod tests {
         let mut enc = AlacEncoder::new(config);
         let pcm = make_pcm_sine(352);
         let mut out = vec![0u8; 8192];
-        let n = enc.encode(&pcm, &mut out);
+        let n = enc.encode(&pcm, &mut out).unwrap();
 
         // Sine should compress meaningfully vs verbatim (~1416 bytes).
         assert!(n > 0, "encoded 0 bytes");
@@ -578,7 +590,7 @@ mod tests {
 
         let mut sizes = Vec::new();
         for _ in 0..10 {
-            let n = enc.encode(&pcm, &mut out);
+            let n = enc.encode(&pcm, &mut out).unwrap();
             sizes.push(n);
         }
 
@@ -630,7 +642,7 @@ mod tests {
         let mut enc = AlacEncoder::new(config);
         let pcm = make_pcm_silence_24(352);
         let mut out = vec![0u8; 16384];
-        let n = enc.encode(&pcm, &mut out);
+        let n = enc.encode(&pcm, &mut out).unwrap();
 
         assert!(n > 0, "encoded 0 bytes");
         // Silence should compress well — verbatim 24-bit stereo is ~2112 bytes.
@@ -653,7 +665,7 @@ mod tests {
         let mut enc = AlacEncoder::new(config);
         let pcm = make_pcm_sine_24(352);
         let mut out = vec![0u8; 16384];
-        let n = enc.encode(&pcm, &mut out);
+        let n = enc.encode(&pcm, &mut out).unwrap();
 
         assert!(n > 0, "encoded 0 bytes");
         let verbatim_approx = 352 * 2 * 3; // ~2112 bytes raw
@@ -679,7 +691,7 @@ mod tests {
 
         let mut sizes = Vec::new();
         for _ in 0..10 {
-            let n = enc.encode(&pcm, &mut out);
+            let n = enc.encode(&pcm, &mut out).unwrap();
             sizes.push(n);
         }
 

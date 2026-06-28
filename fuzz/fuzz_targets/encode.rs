@@ -27,5 +27,5 @@ fuzz_target!(|data: &[u8]| {
     // Output buffer needs to be somewhat larger than PCM in the worst case verbatim.
     let mut out = vec![0u8; required_len * 2 + 1024];
     
-    let _n = encoder.encode(&pcm, &mut out);
+    let _n = encoder.encode(&pcm, &mut out).unwrap();
 });

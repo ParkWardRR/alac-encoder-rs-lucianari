@@ -16,4 +16,4 @@ mod golomb;
 mod predictor;
 mod simd;
 
-pub use encoder::{AlacConfig, AlacEncoder};
+pub use encoder::{AlacConfig, AlacEncoder, AlacError};
