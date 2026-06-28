@@ -6,7 +6,7 @@
 
 use crate::bitwriter::BitWriter;
 use crate::golomb;
-use crate::predictor::{Predictor, DEFAULT_ORDER, DEFAULT_DENSHIFT};
+use crate::predictor::{Predictor, DEFAULT_DENSHIFT, DEFAULT_ORDER};
 use crate::simd;
 
 /// ALAC element types (from ALACAudioTypes.h).
@@ -136,7 +136,15 @@ impl AlacEncoder {
         self.last_mix_res = best_mix_res;
 
         // Write compressed frame.
-        let compressed_size = self.write_compressed_stereo(out, num, order, denshift, chan_bits, mix_bits, best_mix_res);
+        let compressed_size = self.write_compressed_stereo(
+            out,
+            num,
+            order,
+            denshift,
+            chan_bits,
+            mix_bits,
+            best_mix_res,
+        );
 
         // Compare with verbatim size.
         let verbatim_size = self.verbatim_size(num, 2, 16);
@@ -212,8 +220,16 @@ impl AlacEncoder {
 
         // Write compressed frame with extra bytes.
         let compressed_size = self.write_compressed_stereo_24(
-            out, num, order, denshift, chan_bits, mix_bits, best_mix_res,
-            extra_bytes, &extra_u, &extra_v,
+            out,
+            num,
+            order,
+            denshift,
+            chan_bits,
+            mix_bits,
+            best_mix_res,
+            extra_bytes,
+            &extra_u,
+            &extra_v,
         );
 
         let verbatim_size = self.verbatim_size(num, 2, 24);
@@ -264,23 +280,30 @@ impl AlacEncoder {
     }
 
     /// Write a compressed stereo ALAC frame.
+    #[allow(clippy::too_many_arguments)]
     fn write_compressed_stereo(
-        &self, out: &mut [u8], num: usize, order: usize, denshift: u32,
-        _chan_bits: u32, mix_bits: i32, mix_res: i32,
+        &self,
+        out: &mut [u8],
+        num: usize,
+        order: usize,
+        denshift: u32,
+        _chan_bits: u32,
+        mix_bits: i32,
+        mix_res: i32,
     ) -> usize {
         let mut bw = BitWriter::new(out);
         let partial = num != self.config.frame_size as usize;
 
         // Element header: CPE.
         bw.write(TYPE_CPE, 3);
-        bw.write(0, 4);  // elementInstanceTag
+        bw.write(0, 4); // elementInstanceTag
         bw.write(0, 12); // unused
 
         // Flags byte: 0000psse
         let p = if partial { 1u32 } else { 0 };
-        bw.write(p, 1);  // partial frame
-        bw.write(0, 2);  // extraBytes = 0 (16-bit)
-        bw.write(0, 1);  // escape = 0 (compressed)
+        bw.write(p, 1); // partial frame
+        bw.write(0, 2); // extraBytes = 0 (16-bit)
+        bw.write(0, 1); // escape = 0 (compressed)
 
         if partial {
             bw.write(num as u32, 32);
@@ -291,19 +314,19 @@ impl AlacEncoder {
         bw.write(mix_res as u32 & 0xFF, 8);
 
         // Channel U prediction params.
-        bw.write(0, 4);               // modeU = 0
-        bw.write(denshift, 4);        // denShiftU
-        bw.write(PB_FACTOR, 3);       // pbFactorU
-        bw.write(order as u32, 5);    // numU
+        bw.write(0, 4); // modeU = 0
+        bw.write(denshift, 4); // denShiftU
+        bw.write(PB_FACTOR, 3); // pbFactorU
+        bw.write(order as u32, 5); // numU
         for i in 0..order {
             bw.write(self.pred_u.coefs[i] as u16 as u32, 16);
         }
 
         // Channel V prediction params.
-        bw.write(0, 4);               // modeV = 0
-        bw.write(denshift, 4);        // denShiftV
-        bw.write(PB_FACTOR, 3);       // pbFactorV
-        bw.write(order as u32, 5);    // numV
+        bw.write(0, 4); // modeV = 0
+        bw.write(denshift, 4); // denShiftV
+        bw.write(PB_FACTOR, 3); // pbFactorV
+        bw.write(order as u32, 5); // numV
         for i in 0..order {
             bw.write(self.pred_v.coefs[i] as u16 as u32, 16);
         }
@@ -318,24 +341,33 @@ impl AlacEncoder {
     }
 
     /// Write a compressed stereo 24-bit ALAC frame with extra bytes.
+    #[allow(clippy::too_many_arguments)]
     fn write_compressed_stereo_24(
-        &self, out: &mut [u8], num: usize, order: usize, denshift: u32,
-        _chan_bits: u32, mix_bits: i32, mix_res: i32,
-        extra_bytes: u32, extra_u: &[u8], extra_v: &[u8],
+        &self,
+        out: &mut [u8],
+        num: usize,
+        order: usize,
+        denshift: u32,
+        _chan_bits: u32,
+        mix_bits: i32,
+        mix_res: i32,
+        extra_bytes: u32,
+        extra_u: &[u8],
+        extra_v: &[u8],
     ) -> usize {
         let mut bw = BitWriter::new(out);
         let partial = num != self.config.frame_size as usize;
 
         // Element header: CPE.
         bw.write(TYPE_CPE, 3);
-        bw.write(0, 4);  // elementInstanceTag
+        bw.write(0, 4); // elementInstanceTag
         bw.write(0, 12); // unused
 
         // Flags byte: 0000psse
         let p = if partial { 1u32 } else { 0 };
-        bw.write(p, 1);           // partial frame
+        bw.write(p, 1); // partial frame
         bw.write(extra_bytes, 2); // extraBytes = 1 for 24-bit
-        bw.write(0, 1);           // escape = 0 (compressed)
+        bw.write(0, 1); // escape = 0 (compressed)
 
         if partial {
             bw.write(num as u32, 32);
@@ -380,7 +412,11 @@ impl AlacEncoder {
 
     /// Write a compressed mono ALAC frame.
     fn write_compressed_mono(
-        &self, out: &mut [u8], num: usize, order: usize, denshift: u32,
+        &self,
+        out: &mut [u8],
+        num: usize,
+        order: usize,
+        denshift: u32,
         _chan_bits: u32,
     ) -> usize {
         let mut bw = BitWriter::new(out);
@@ -414,7 +450,14 @@ impl AlacEncoder {
     }
 
     /// Write a verbatim (uncompressed) ALAC frame.
-    fn encode_verbatim(&self, pcm: &[u8], out: &mut [u8], num: usize, channels: usize, bit_depth: usize) -> usize {
+    fn encode_verbatim(
+        &self,
+        pcm: &[u8],
+        out: &mut [u8],
+        num: usize,
+        channels: usize,
+        bit_depth: usize,
+    ) -> usize {
         let mut bw = BitWriter::new(out);
 
         // Element header.
@@ -423,7 +466,7 @@ impl AlacEncoder {
         } else {
             bw.write(TYPE_SCE, 3);
         }
-        bw.write(0, 4);  // elementInstanceTag
+        bw.write(0, 4); // elementInstanceTag
         bw.write(0, 12); // unused
 
         bw.write(1, 1); // hasSize = 1
@@ -442,9 +485,8 @@ impl AlacEncoder {
                     bw.write(sample as u32, 16);
                 }
                 24 => {
-                    let sample = pcm[off] as u32
-                        | (pcm[off + 1] as u32) << 8
-                        | (pcm[off + 2] as u32) << 16;
+                    let sample =
+                        pcm[off] as u32 | (pcm[off + 1] as u32) << 8 | (pcm[off + 2] as u32) << 16;
                     bw.write(sample, 24);
                 }
                 _ => {
@@ -468,7 +510,7 @@ impl AlacEncoder {
         // samples: num * channels * bit_depth bits
         // end: 3 bits
         let total_bits = 55 + num * channels * bit_depth + 3;
-        (total_bits + 7) / 8
+        total_bits.div_ceil(8)
     }
 }
 
@@ -521,7 +563,8 @@ mod tests {
         assert!(
             n < verbatim_approx,
             "sine encoded to {} bytes, expected < {} (verbatim)",
-            n, verbatim_approx
+            n,
+            verbatim_approx
         );
     }
 
@@ -546,7 +589,8 @@ mod tests {
         assert!(
             last <= first + 10,
             "compression got worse: first={} last={}",
-            first, last
+            first,
+            last
         );
     }
 
@@ -591,7 +635,11 @@ mod tests {
         assert!(n > 0, "encoded 0 bytes");
         // Silence should compress well — verbatim 24-bit stereo is ~2112 bytes.
         // 24-bit mode has fixed extra-byte overhead (352 * 2 * 1 = 704 bytes).
-        assert!(n < 1000, "24-bit silence encoded to {} bytes, expected < 1000", n);
+        assert!(
+            n < 1000,
+            "24-bit silence encoded to {} bytes, expected < 1000",
+            n
+        );
     }
 
     #[test]
@@ -612,7 +660,8 @@ mod tests {
         assert!(
             n < verbatim_approx,
             "24-bit sine encoded to {} bytes, expected < {} (verbatim)",
-            n, verbatim_approx
+            n,
+            verbatim_approx
         );
     }
 
@@ -639,7 +688,8 @@ mod tests {
         assert!(
             last <= first + 20,
             "24-bit compression got worse: first={} last={}",
-            first, last
+            first,
+            last
         );
     }
 }

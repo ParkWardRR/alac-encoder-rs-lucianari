@@ -3,6 +3,7 @@
 ![Language](https://img.shields.io/badge/Language-Rust-blue.svg)
 ![License](https://img.shields.io/badge/License-BlueOak_1.0.0-green.svg)
 ![Status](https://img.shields.io/badge/Status-Production_Ready-brightgreen.svg)
+![CI](https://github.com/USER/alac-encoder-rs-lucianari/actions/workflows/ci.yml/badge.svg)
 
 ## Overview
 High-performance ALAC (Lossless Audio Codec) encoder in pure Rust featuring SIMD acceleration (NEON/SSE2), adaptive FIR prediction, and Golomb-Rice entropy coding.
@@ -31,8 +32,36 @@ graph TD;
 Integration is straightforward. Consult the module source for exact API signatures.
 
 ```rust
-// 1. Initialize the primary component
-// 2. Supply the required I/O interfaces or buffers
-// 3. Execute the processing loop or listener
+use alac_encoder_rs_lucianari::{AlacEncoder, AlacConfig};
+
+// 1. Initialize configuration
+let config = AlacConfig {
+    frame_size: 352,
+    channels: 2,
+    bit_depth: 16,
+    sample_rate: 44100,
+};
+
+// 2. Create the encoder
+let mut encoder = AlacEncoder::new(config);
+
+// 3. Encode PCM data
+let pcm_data = vec![0u8; 352 * 2 * 2]; // Your raw PCM data here
+let mut output_buffer = vec![0u8; 4096];
+let encoded_bytes = encoder.encode(&pcm_data, &mut output_buffer);
+
+println!("Encoded {} bytes of ALAC data.", encoded_bytes);
 ```
-*(Refer to the in-code documentation and `*_test.rs` files for exhaustive initialization examples and constraints).*
+
+## Fuzzing and Benchmarking
+
+This library uses `criterion` for benchmarking and `cargo-fuzz` for fuzzing.
+To run the benchmarks:
+```bash
+cargo bench
+```
+
+To run the fuzzer (requires `cargo-fuzz` and nightly Rust):
+```bash
+cargo +nightly fuzz run encode
+```

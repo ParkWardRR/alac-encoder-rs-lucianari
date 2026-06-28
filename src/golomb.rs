@@ -25,9 +25,8 @@ const MAX_DATA_BITS_16: u32 = 16;
 pub fn encode_residuals(residuals: &[i32], num: usize, bw: &mut BitWriter) {
     let mut mb: i32 = MB0; // running mean estimate (scaled by 4)
 
-    for i in 0..num {
+    for &val in residuals.iter().take(num) {
         // Zig-zag encode: signed → unsigned.
-        let val = residuals[i];
         let uval: u32 = if val >= 0 {
             (val as u32) << 1
         } else {
@@ -77,12 +76,7 @@ pub fn encode_residuals(residuals: &[i32], num: usize, bw: &mut BitWriter) {
         // mb ≈ 4 * mean(|residual|)
         // Update: mb += (uval - mb/4), clamped to [1, 0xFFFF].
         mb += uval as i32 - (mb >> 2);
-        if mb < 1 {
-            mb = 1;
-        }
-        if mb > 0xFFFF {
-            mb = 0xFFFF;
-        }
+        mb = mb.clamp(1, 0xFFFF);
     }
 }
 
@@ -107,8 +101,7 @@ pub fn estimate_bits(residuals: &[i32], num: usize) -> u32 {
     let mut mb: i32 = MB0;
     let mut total_bits: u32 = 0;
 
-    for i in 0..num {
-        let val = residuals[i];
+    for &val in residuals.iter().take(num) {
         let uval: u32 = if val >= 0 {
             (val as u32) << 1
         } else {
@@ -125,8 +118,7 @@ pub fn estimate_bits(residuals: &[i32], num: usize) -> u32 {
         }
 
         mb += uval as i32 - (mb >> 2);
-        if mb < 1 { mb = 1; }
-        if mb > 0xFFFF { mb = 0xFFFF; }
+        mb = mb.clamp(1, 0xFFFF);
     }
 
     total_bits
@@ -140,8 +132,8 @@ mod tests {
     fn test_calc_k() {
         assert_eq!(calc_k(0), 0);
         assert_eq!(calc_k(1), 0);
-        assert_eq!(calc_k(4), 0);  // mean=1 → k=0
-        assert_eq!(calc_k(8), 1);  // mean=2 → k=1
+        assert_eq!(calc_k(4), 0); // mean=1 → k=0
+        assert_eq!(calc_k(8), 1); // mean=2 → k=1
         assert_eq!(calc_k(16), 2); // mean=4 → k=2
         assert_eq!(calc_k(40), 4); // mean=10 → ceil(log2(10))=4
     }
@@ -156,7 +148,11 @@ mod tests {
             } else {
                 (((-signed) as u32) << 1) - 1
             };
-            assert_eq!(uval, expected, "zig_zag({}) = {}, expected {}", signed, uval, expected);
+            assert_eq!(
+                uval, expected,
+                "zig_zag({}) = {}, expected {}",
+                signed, uval, expected
+            );
         }
     }
 
@@ -170,12 +166,16 @@ mod tests {
         let nbytes = bw.finish();
         // 352 zeros should encode to ~352 bits (1 bit each: unary 0 + terminator).
         // Plus some overhead. Should be well under 100 bytes.
-        assert!(nbytes < 100, "silence encoded to {} bytes, expected < 100", nbytes);
+        assert!(
+            nbytes < 100,
+            "silence encoded to {} bytes, expected < 100",
+            nbytes
+        );
     }
 
     #[test]
     fn test_estimate_matches_encode() {
-        let residuals: Vec<i32> = (0..100).map(|i| ((i * 7) % 50) as i32 - 25).collect();
+        let residuals: Vec<i32> = (0..100).map(|i| ((i * 7) % 50) - 25).collect();
         let estimated = estimate_bits(&residuals, 100);
 
         let mut buf = vec![0u8; 4096];

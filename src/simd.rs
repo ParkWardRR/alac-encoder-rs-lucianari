@@ -134,7 +134,12 @@ unsafe fn fir_dot_neon(coefs: &[i16], history: &[i32]) -> i64 {
 /// NEON deinterleave: loads 8 stereo pairs at a time, deinterleaves with VLD2.
 #[cfg(target_arch = "aarch64")]
 #[target_feature(enable = "neon")]
-unsafe fn deinterleave_s16le_neon(pcm: &[u8], left: &mut [i32], right: &mut [i32], num_samples: usize) {
+unsafe fn deinterleave_s16le_neon(
+    pcm: &[u8],
+    left: &mut [i32],
+    right: &mut [i32],
+    num_samples: usize,
+) {
     let chunks = num_samples / 8;
     let pcm_ptr = pcm.as_ptr() as *const i16;
 
@@ -210,7 +215,9 @@ mod tests {
     fn test_fir_dot_product() {
         let coefs: Vec<i16> = vec![10, -20, 30, -40, 50, -60, 70, -80];
         let history: Vec<i32> = vec![100, 200, 300, 400, 500, 600, 700, 800];
-        let expected: i64 = coefs.iter().zip(history.iter())
+        let expected: i64 = coefs
+            .iter()
+            .zip(history.iter())
             .map(|(c, h)| *c as i64 * *h as i64)
             .sum();
         assert_eq!(fir_dot_product(&coefs, &history), expected);

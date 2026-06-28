@@ -8,7 +8,7 @@
 //! - Adaptive Golomb-Rice entropy coding
 //! - Automatic verbatim fallback when compression doesn't help
 //! - SIMD: aarch64 NEON for FIR inner loop and sample deinterleaving,
-//!         x86_64 SSE2 fallback
+//!   x86_64 SSE2 fallback
 
 mod bitwriter;
 mod encoder;
@@ -16,4 +16,4 @@ mod golomb;
 mod predictor;
 mod simd;
 
-pub use encoder::{AlacEncoder, AlacConfig};
+pub use encoder::{AlacConfig, AlacEncoder};

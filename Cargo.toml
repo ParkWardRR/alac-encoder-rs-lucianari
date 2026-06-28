@@ -6,3 +6,10 @@ description = "ALAC (vendor Lossless Audio Codec) encoder with SIMD acceleration
 license = "BlueOak-1.0.0"
 
 [dependencies]
+
+[dev-dependencies]
+criterion = "0.5"
+
+[[bench]]
+name = "encoder_bench"
+harness = false

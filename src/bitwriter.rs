@@ -4,9 +4,9 @@
 /// for efficiency. Flushes complete bytes as they fill.
 pub struct BitWriter<'a> {
     buf: &'a mut [u8],
-    pos: usize,     // byte position in buf
-    bit_buf: u64,   // accumulated bits (MSB-first)
-    bit_pos: u32,   // number of valid bits in bit_buf (0..64)
+    pos: usize,   // byte position in buf
+    bit_buf: u64, // accumulated bits (MSB-first)
+    bit_pos: u32, // number of valid bits in bit_buf (0..64)
 }
 
 impl<'a> BitWriter<'a> {
@@ -41,6 +41,7 @@ impl<'a> BitWriter<'a> {
     }
 
     /// Write a single bit.
+    #[allow(dead_code)]
     #[inline]
     pub fn write_bit(&mut self, bit: u32) {
         self.write(bit & 1, 1);
@@ -57,6 +58,7 @@ impl<'a> BitWriter<'a> {
     }
 
     /// Current byte position (bytes fully written so far).
+    #[allow(dead_code)]
     #[inline]
     pub fn bytes_written(&self) -> usize {
         self.pos
@@ -82,7 +84,7 @@ mod tests {
     fn test_write_unaligned() {
         let mut buf = [0u8; 4];
         let mut bw = BitWriter::new(&mut buf);
-        bw.write(0b101, 3);   // 3 bits: 101
+        bw.write(0b101, 3); // 3 bits: 101
         bw.write(0b11010, 5); // 5 bits: 11010
         let n = bw.finish();
         assert_eq!(n, 1);

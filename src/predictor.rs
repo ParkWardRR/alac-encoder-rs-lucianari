@@ -107,8 +107,8 @@ impl Predictor {
             // coefs[k] += sgn * dd
             let sgn = sign_of(del as i32);
             if sgn != 0 {
-                for k in 0..order {
-                    let dd = sign_of(history[k]);
+                for (k, &history_k) in history.iter().enumerate().take(order) {
+                    let dd = sign_of(history_k);
                     // Saturating add to prevent overflow in i16 coefs.
                     self.coefs[k] = self.coefs[k].saturating_add((sgn * dd) as i16);
                 }
@@ -120,7 +120,13 @@ impl Predictor {
 /// Returns -1, 0, or 1 for the sign of a value.
 #[inline]
 fn sign_of(i: i32) -> i32 {
-    if i > 0 { 1 } else if i < 0 { -1 } else { 0 }
+    if i > 0 {
+        1
+    } else if i < 0 {
+        -1
+    } else {
+        0
+    }
 }
 
 #[cfg(test)]
@@ -142,6 +148,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::needless_range_loop)]
     fn test_predictor_dc() {
         // Constant signal — after warm-up, residuals should be zero.
         let mut pred = Predictor::new(DEFAULT_ORDER, DEFAULT_DENSHIFT);
@@ -157,7 +164,12 @@ mod tests {
         }
         // After warm-up, predictor converges — residuals near zero.
         for j in DEFAULT_ORDER + 10..352 {
-            assert!(output[j].abs() <= 1, "residual[{}] = {} too large", j, output[j]);
+            assert!(
+                output[j].abs() <= 1,
+                "residual[{}] = {} too large",
+                j,
+                output[j]
+            );
         }
     }
 
