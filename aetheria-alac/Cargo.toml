@@ -1,9 +1,0 @@
-[package]
-name = "spinoff-alac"
-version.workspace = true
-edition.workspace = true
-license.workspace = true
-description = "ALAC (vendor Lossless Audio Codec) encoder with SIMD acceleration"
-
-[features]
-default = []

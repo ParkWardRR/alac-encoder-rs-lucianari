@@ -1,0 +1,8 @@
+[package]
+name = "alac-encoder-rs-lucianari"
+version = "0.1.0"
+edition = "2021"
+description = "ALAC (vendor Lossless Audio Codec) encoder with SIMD acceleration"
+license = "BlueOak-1.0.0"
+
+[dependencies]
