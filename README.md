@@ -4,9 +4,6 @@
 ![License](https://img.shields.io/badge/License-BlueOak_1.0.0-green.svg)
 ![Status](https://img.shields.io/badge/Status-Production_Ready-brightgreen.svg)
 
-## Release Status
-This repository is fully prepared for public release. CI/CD pipelines, exhaustive fuzzing, and extensive benchmarking have been heavily integrated to guarantee production-ready stability.
-
 ## Overview
 High-performance ALAC (Lossless Audio Codec) encoder in pure Rust featuring SIMD acceleration (NEON/AVX2), adaptive FIR prediction, and Golomb-Rice entropy coding.
 
