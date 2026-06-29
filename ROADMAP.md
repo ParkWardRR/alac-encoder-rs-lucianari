@@ -44,14 +44,14 @@ This document outlines the strategic vision and engineering milestones for the `
   - Implement seamless integration modules for `rodio`.
 - [x] **Custom Hardware DSP Targets:** Explore compilation and deployment patterns for specialized Digital Signal Processors (e.g., Hexagon DSPs).
 
-## Phase 6: Audiophile-Grade DSP & Mastering Upgrades
+## Phase 6: Advanced DSP & Mastering Upgrades
 **Focus:** Expanding the crate from a lossless compressor into a mastering-grade digital audio pipeline for high-end audio delivery.
 
 - [x] **Psychoacoustically Optimized Dithering:** Implement advanced noise-shaping dithering curves (e.g., Triangular PDF, POW-r equivalent models) to smoothly reduce 32-bit float or 24-bit high-resolution mastering sources down to 16-bit ALAC, effectively pushing quantization noise into inaudible frequency bands.
 - [x] **Apodizing SRC (Sample Rate Conversion):** Develop a high-precision, 64-bit minimum-phase apodizing filter for downsampling high-resolution audio (e.g., 384kHz/192kHz to 44.1kHz). Apodizing filters will eliminate pre-ringing artifacts introduced by the original ADCs, offering a cleaner transient response for discerning listeners.
-- [x] **DSD (Direct Stream Digital) Ingestion Pipeline:** Implement an audiophile-grade decimation pipeline to ingest 1-bit DSD streams (DSD64/128/256/512). The pipeline will utilize extremely high-order FIR filtering to convert DSD into pristine 24-bit or 32-bit PCM prior to ALAC encoding.
+- [x] **DSD (Direct Stream Digital) Ingestion Pipeline:** Implement a mastering-grade decimation pipeline to ingest 1-bit DSD streams (DSD64/128/256/512). The pipeline will utilize extremely high-order FIR filtering to convert DSD into pristine 24-bit or 32-bit PCM prior to ALAC encoding.
 - [x] **MQA-Aware Passthrough and Analysis:** Add capabilities to detect and preserve Master Quality Authenticated (MQA) folding patterns during the encoding process to ensure the encoded ALAC stream remains bit-perfect and decodable by MQA-certified hardware DACs.
-- [x] **Bit-Perfect Verification Suite:** Provide an integrated cryptographic test suite that guarantees bit-perfect transparency of the entire DSP pipeline down to the ALAC frame level, aimed at proving mathematical lossless perfection to the audiophile market.
+- [x] **Bit-Perfect Verification Suite:** Provide an integrated cryptographic test suite that guarantees bit-perfect transparency of the entire DSP pipeline down to the ALAC frame level, aimed at proving mathematical lossless perfection to the professional market.
 
 ## Phase 7: Immersive Audio & Spatial Metadata Integration
 **Focus:** Elevating the pipeline to handle object-based spatial audio and next-generation immersive sound formats.

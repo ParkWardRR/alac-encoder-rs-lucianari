@@ -11,7 +11,7 @@ The encoder is entirely `#![no_std]` compatible with a zero-copy pipeline archit
 
 In addition to the Rust crate, this repository provides native **Go bindings** via CGO and a reference **gRPC Cloud-Native Orchestrator** for distributed encoding.
 
-The crate also features a powerful `audiophile` module powered by SIMD (AVX/NEON) hardware acceleration. It includes high-fidelity features like Apodizing sample rate conversion, DSD decimation, Pow-R style noise-shaped dithering, MQA detection, and a cryptographic bit-perfect verification suite.
+The crate also features a powerful `mastering` module powered by SIMD (AVX/NEON) hardware acceleration. It includes high-fidelity features like Apodizing sample rate conversion, DSD decimation, Pow-R style noise-shaped dithering, MQA detection, and a cryptographic bit-perfect verification suite.
 
 Additionally, the new `spatial` module provides next-generation Immersive Audio capabilities, including ADM BWF (Dolby Atmos) metadata parsing and High-Density Immersive Layout matrices (7.1.4, 9.1.6).
 

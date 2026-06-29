@@ -18,7 +18,7 @@ ebpf = ["dep:usdt"]
 wasm = ["dep:wasm-bindgen", "dep:js-sys"]
 integrations = ["std", "dep:symphonia", "dep:rodio"]
 io_uring = ["async", "dep:tokio-uring"]
-audiophile = ["std", "dep:rubato", "dep:rand", "dep:twox-hash"]
+mastering = ["std", "dep:rubato", "dep:rand", "dep:twox-hash"]
 spatial = ["std", "dep:bwavfile"]
 
 [dependencies]

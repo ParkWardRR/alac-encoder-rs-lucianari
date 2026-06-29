@@ -27,8 +27,8 @@ pub mod grpc;
 #[cfg(feature = "crypto")]
 pub mod crypto;
 
-#[cfg(feature = "audiophile")]
-pub mod audiophile;
+#[cfg(feature = "mastering")]
+pub mod mastering;
 
 #[cfg(feature = "spatial")]
 pub mod spatial;
